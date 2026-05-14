@@ -1,0 +1,5 @@
+{
+    "ruff.interpreter": [
+        "/home/syk/workspace/nanoVllm/.venv/bin/python"
+    ]
+}

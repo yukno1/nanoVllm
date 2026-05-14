@@ -1,5 +1,3 @@
-from typing import Any
-
 import torch
 from torch import nn
 
@@ -19,7 +17,7 @@ class RMSNorm(nn.Module):
         x = x.to(orig_dtype).mul_(self.weight)
         return x
 
-    def add_rms_forward(
+    def residual_rms_forward(
         self, x: torch.Tensor, residual: torch.Tensor
     ) -> tuple[torch.Tensor, torch.Tensor]:
         orig_dtype = x.dtype
@@ -36,4 +34,4 @@ class RMSNorm(nn.Module):
         if residual is None:
             return self.rms_forward(x)
         else:
-            return self.add_rms_forward(x, residual)
+            return self.residual_rms_forward(x, residual)
