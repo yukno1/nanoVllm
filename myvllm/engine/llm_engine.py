@@ -1,5 +1,5 @@
 from dataclasses import fields
-from config import Config
+from ..config import Config
 
 
 class LLMEngine:

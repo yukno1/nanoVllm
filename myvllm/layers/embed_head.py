@@ -2,9 +2,9 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 import torch.distributed as dist
-from typing import Any, Callable
+from typing import Callable
 
-from utils import get_context
+from ..utils import get_context
 
 
 class Parameter(nn.Parameter):

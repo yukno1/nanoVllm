@@ -141,9 +141,9 @@ wheels = [
 ]
 
 [[package]]
-name = "nanovllm"
+name = "myvllm"
 version = "0.1.0"
-source = { virtual = "." }
+source = { editable = "." }
 dependencies = [
     { name = "numpy" },
     { name = "torch", version = "2.11.0", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform != 'linux' and sys_platform != 'win32'" },

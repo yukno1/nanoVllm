@@ -47,3 +47,7 @@ def set_context(
         context_lens,
         block_tables,
     )
+
+
+if __name__ == "__main__":
+    pass
