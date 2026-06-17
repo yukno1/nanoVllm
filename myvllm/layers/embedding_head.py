@@ -21,6 +21,7 @@ class VocabParallelEmbedding(nn.Module):
         self.tp_size = dist.get_world_size()
         self.tp_rank = dist.get_rank()
 
+        # keep the original num_embeddings
         self.num_embeddings = num_embeddings
         # pad to make it divisible by tp_size
         self.padded_num_embeddings = (

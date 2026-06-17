@@ -10,6 +10,10 @@ class Parameter(nn.Parameter):
 
 
 class LinearBase(nn.Module):
+    """
+    A base class for linear layers.
+    """
+
     def __init__(
         self,
         input_size: int,
@@ -92,9 +96,9 @@ class ColumnParallelLinear(LinearBase):
         bias: bool = False,
     ) -> None:
         tp_size = dist.get_world_size()
-        assert (
-            output_size % tp_size == 0
-        ), "Output size must be divisible by tensor parallel size."
+        assert output_size % tp_size == 0, (
+            "Output size must be divisible by tensor parallel size."
+        )
         super().__init__(
             input_size, output_size // tp_size, bias, tp_dim=0
         )  # tp_dim=0 -> column parallel
@@ -114,9 +118,9 @@ class ColumnParallelLinear(LinearBase):
         shard_size = (
             full_data_output_size // self.tp_size
         )  # param.data.size(self.tp_dim)
-        assert shard_size == param.data.size(
-            0
-        ), "Shard size dows not match the parameter size."
+        assert shard_size == param.data.size(0), (
+            "Shard size dows not match the parameter size."
+        )
         start_idx = self.tp_rank * shard_size  # offset
         loaded_weight = loaded_weight.narrow(self.tp_dim, start_idx, shard_size)
         param_data.copy_(loaded_weight)
@@ -145,12 +149,12 @@ class MergedColumnParallelLinear(ColumnParallelLinear):
         *,
         loaded_shard_id: int = -1,
     ) -> None:
-        assert (
-            self.tp_dim is not None
-        ), "tp_dim must be set for MergedColumnParallelLinear"
-        assert (
-            self.loaded_shard_id == -1
-        ), "loaded_shard_id must be set for MergedColumnParallelLinear"
+        assert self.tp_dim is not None, (
+            "tp_dim must be set for MergedColumnParallelLinear"
+        )
+        assert self.loaded_shard_id == -1, (
+            "loaded_shard_id must be set for MergedColumnParallelLinear"
+        )
         param_data = param.data
         shard_offset = sum(self.output_sizes[:loaded_shard_id]) // self.tp_size
         shard_size = self.output_sizes[loaded_shard_id] // self.tp_size
@@ -171,13 +175,13 @@ class QKVParallelLinear(ColumnParallelLinear):
         tp_size = dist.get_world_size()
         total_num_kv_heads = total_num_kv_heads or total_num_heads
         self.head_size = head_size
-        assert (
-            total_num_heads % tp_size == 0
-        ), "total_num_heads must be multiples of tp_size"
+        assert total_num_heads % tp_size == 0, (
+            "total_num_heads must be multiples of tp_size"
+        )
         self.num_heads = total_num_heads // tp_size
-        assert (
-            total_num_kv_heads % tp_size == 0
-        ), "total_num_kv_heads must be multiples of tp_size"
+        assert total_num_kv_heads % tp_size == 0, (
+            "total_num_kv_heads must be multiples of tp_size"
+        )
         self.num_kv_heads = total_num_kv_heads // tp_size
         output_size = (total_num_heads + 2 * total_num_kv_heads) * self.head_size
         super().__init__(hidden_size, output_size, bias)
@@ -194,9 +198,9 @@ class QKVParallelLinear(ColumnParallelLinear):
             "k",
             "v",
         ], "loaded_shard_id must be 'q', 'k', or 'v'."
-        assert (
-            self.tp_dim is not None
-        ), "tp_dim must be set for MergedColumnParallelLinear"
+        assert self.tp_dim is not None, (
+            "tp_dim must be set for MergedColumnParallelLinear"
+        )
         # batch_size * num_heads * num_token * head_size
         param_data = param.data
 
@@ -222,15 +226,15 @@ class QKVParallelLinear(ColumnParallelLinear):
 class RowParallelLinear(LinearBase):
     def __init__(self, input_size: int, output_size: int, bias: bool = False) -> None:
         tp_size = dist.get_world_size()
-        assert (
-            input_size % tp_size == 0
-        ), "Input size must be divisible by tensor parallel size."
+        assert input_size % tp_size == 0, (
+            "Input size must be divisible by tensor parallel size."
+        )
         super().__init__(input_size // tp_size, output_size, bias, tp_dim=1)
 
     def weight_loader(self, param: Parameter, loaded_weight: torch.Tensor) -> None:
-        assert (
-            self.tp_dim is not None
-        ), "tp_dim must be set for MergedColumnParallelLinear"
+        assert self.tp_dim is not None, (
+            "tp_dim must be set for MergedColumnParallelLinear"
+        )
 
         param_data = param.data
         if param_data.ndim == 1:
