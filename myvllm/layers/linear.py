@@ -163,7 +163,7 @@ class MergedColumnParallelLinear(ColumnParallelLinear):
         param_data.copy_(loaded_weight)
 
 
-class QKVParallelLinear(ColumnParallelLinear):
+class QKVColumnParallelLinear(ColumnParallelLinear):
     def __init__(
         self,
         hidden_size: int,

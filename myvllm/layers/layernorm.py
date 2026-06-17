@@ -1,5 +1,6 @@
 import torch
 from torch import nn
+from typing import overload
 
 
 class LayerNorm(nn.Module):
@@ -29,6 +30,14 @@ class LayerNorm(nn.Module):
     ) -> tuple[torch.Tensor, torch.Tensor]:
         x = x + residual
         return self.rms_forward(x), x
+
+    @overload
+    def forward(self, x: torch.Tensor, residual: None = None) -> torch.Tensor: ...
+
+    @overload
+    def forward(
+        self, x: torch.Tensor, residual: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor]: ...
 
     def forward(
         self, x: torch.Tensor, residual: torch.Tensor | None = None
