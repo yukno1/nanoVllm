@@ -2,7 +2,7 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 import torch.distributed as dist
-from typing import Callable
+from typing import Callable, Literal
 
 
 class Parameter(nn.Parameter):
@@ -19,7 +19,7 @@ class LinearBase(nn.Module):
         input_size: int,
         output_size: int,
         bias: bool = False,
-        tp_dim: int | None = None,
+        tp_dim: Literal[0, 1, None] = None,
     ) -> None:
         super().__init__()
         # set tp_dim, tp_rank, tp_world_size for tensor parallelism
@@ -70,10 +70,15 @@ for name, param in model.named_parameters():
 """
 
 
-# the simpliest Linear layer: ReplicatedLinear(LinearBase)
-# where we simply copy the weight as the weight_loader
-# and run the forward as a normal linear layer
 class ReplicatedLinear(LinearBase):
+    """
+    最简单的线性层: ReplicatedLinear (继承自 LinearBase)
+
+    weight_loader 就是简单地把权重拷贝过来（不做任何切分）
+
+    forward 就是一个普通线性层的计算
+    """
+
     def __init__(self, input_size: int, output_size: int, bias: bool = False):
         super().__init__(input_size, output_size, bias, 0)
 
@@ -89,6 +94,24 @@ class ReplicatedLinear(LinearBase):
 
 
 class ColumnParallelLinear(LinearBase):
+    """
+    列并行线性层 (Column Parallel Linear)。
+
+    用于张量并行 (TP) 场景：把完整的输出维度切分成 tp_size 份，
+    每张 GPU 只负责其中一份。即权重矩阵沿"输出维" (dim 0)切分，
+    属于 tp_dim=0 的切分方式。
+
+    切分示意 (tp_size=2):
+        完整权重 W [output, input]
+        ┌──────────────────┐
+        │ GPU0: 前一半行   │  → 本卡权重形状 [output/2, input]
+        │ GPU1: 后一半行   │
+        └──────────────────┘
+
+    由于各卡输出的行互不重叠，前向计算后【不需要】通信
+    （与 RowParallelLinear 的 all_reduce 不同）。
+    """
+
     def __init__(
         self,
         input_size: int,
@@ -96,9 +119,12 @@ class ColumnParallelLinear(LinearBase):
         bias: bool = False,
     ) -> None:
         tp_size = dist.get_world_size()
+        # 完整输出维必须能被 GPU 数量整除，否则无法均匀切分
         assert output_size % tp_size == 0, (
             "Output size must be divisible by tensor parallel size."
         )
+        # 每张卡只持有 output_size // tp_size 行的权重
+        # tp_dim=0 表示沿权重W的输出维（第 0 维）切分
         super().__init__(
             input_size, output_size // tp_size, bias, tp_dim=0
         )  # tp_dim=0 -> column parallel
@@ -109,9 +135,12 @@ class ColumnParallelLinear(LinearBase):
         loaded_weight: torch.Tensor,
     ) -> None:
         """
-        :param
+        把 checkpoint 中的完整权重加载到当前 GPU 的分片上。
+
+        :param param: 当前卡上待填充的参数，形状 [output/tp_size, input]
+        :param loaded_weight: checkpoint 中的完整权重，形状 [output, input]
         """
-        assert self.tp_dim is not None, "tp_dim must be set for ColumnParallelLinear"
+        # assert self.tp_dim is not None, "tp_dim must be set for ColumnParallelLinear"
         param_data = param.data
         full_data_output_size = loaded_weight.size(0)
         # output size of each gpu
@@ -149,9 +178,9 @@ class MergedColumnParallelLinear(ColumnParallelLinear):
         *,
         loaded_shard_id: int = -1,
     ) -> None:
-        assert self.tp_dim is not None, (
-            "tp_dim must be set for MergedColumnParallelLinear"
-        )
+        # assert self.tp_dim is not None, (
+        #     "tp_dim must be set for MergedColumnParallelLinear"
+        # )
         assert self.loaded_shard_id == -1, (
             "loaded_shard_id must be set for MergedColumnParallelLinear"
         )
@@ -198,9 +227,9 @@ class QKVColumnParallelLinear(ColumnParallelLinear):
             "k",
             "v",
         ], "loaded_shard_id must be 'q', 'k', or 'v'."
-        assert self.tp_dim is not None, (
-            "tp_dim must be set for MergedColumnParallelLinear"
-        )
+        # assert self.tp_dim is not None, (
+        #     "tp_dim must be set for MergedColumnParallelLinear"
+        # )
         # batch_size * num_heads * num_token * head_size
         param_data = param.data
 
@@ -232,9 +261,9 @@ class RowParallelLinear(LinearBase):
         super().__init__(input_size // tp_size, output_size, bias, tp_dim=1)
 
     def weight_loader(self, param: Parameter, loaded_weight: torch.Tensor) -> None:
-        assert self.tp_dim is not None, (
-            "tp_dim must be set for MergedColumnParallelLinear"
-        )
+        # assert self.tp_dim is not None, (
+        #     "tp_dim must be set for MergedColumnParallelLinear"
+        # )
 
         param_data = param.data
         if param_data.ndim == 1:

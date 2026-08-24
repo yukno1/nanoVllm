@@ -16,7 +16,16 @@ from ..utils import *
 class ModelRunner:
     def __init__(self, config: dict, rank: int, event: Event | list[Event]):
         self.config = config
-        self.event = event
+        # self.event = event
+        # Split event storage by rank to avoid Union type issues
+        if event is Event:
+            self.events: list[Event] = (
+                event  # rank 0 gets the list of all worker events
+            )
+            self.event: Event | None = None  # rank 0 never uses a single event
+        elif event is list[Event]:
+            self.event: Event = event  # worker ranks get their own event
+            self.events: list[Event] | None = None  # workers never use the events list
 
         # set distributed config
         self.block_size = config["block_size"]
@@ -131,6 +140,7 @@ class ModelRunner:
             "read_shm can only be called when world_size > 1 and rank != 0"
         )
         self.event.wait()
+        assert self.shm.buf
         n = int.from_bytes(self.shm.buf[:4], "little")  # read length
         method_name, *args = pickle.loads(self.shm.buf[4 : n + 4])
         self.event.clear()
@@ -145,9 +155,11 @@ class ModelRunner:
         # Flatten: (method_name, args) where args is a tuple -> (method_name, *args)
         data = pickle.dumps((method_name, *args))
         n = len(data)
+        assert self.shm.buf
         self.shm.buf[:4] = n.to_bytes(4, "little")
         self.shm.buf[4 : n + 4] = data
-        for event in self.event:
+        assert self.events
+        for event in self.events:
             event.set()
 
     # close shared memory, destroy process group, delete graphs

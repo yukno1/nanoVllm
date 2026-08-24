@@ -191,8 +191,8 @@ def main():
     # print("Running vLLM benchmark...")
     # vllm = run_vllm(tokenizer)
 
-    # print("Running transformers benchmark...")
-    # transformers = run_transformers_test(tokenizer)
+    print("Running transformers benchmark...")
+    transformers = run_transformers_test(tokenizer)
 
     # results = {"minivllm": mini, "vLLM": vllm, "transformers": transformers}
     results = {"minivllm": mini, "transformers": transformers}
