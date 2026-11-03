@@ -18,11 +18,11 @@ def store_kvcache_kernel(
     block_size: tl.constexpr,
 ):
     """
-    Store keys and values into paged KV cache.
-    Each token is mapped to a slot via slot_mapping.
-    Grid layout: (num_tokens, num_kv_heads)
-    Cache layout: (num_blocks, block_size, num_kv_heads, head_dim)
+    将键和值存储到分页 KV 缓存中。每个 token 通过 slot_mapping 映射到一个 slot。\n
+    Grid 布局：(num_tokens, num_kv_heads)\n
+    Cache 布局：(num_blocks, block_size, num_kv_heads, head_dim)
     """
+    # 每个 program 搬一个 token 的一个 head：
     # thread ID, in dimension 0
     token_idx = tl.program_id(0)  # each GPU thread processes 1 token
     # slot ID, where in cache to store this token
@@ -52,7 +52,11 @@ def store_kvcache_kernel(
         + head_offsets
     )
 
-    # Cache: (num_blocks, block_size, num_kv_heads, head_dim)
+    # 地址计算就是把 slot 拆成 (block_idx, block_offset) 后在 4 维缓存上做 stride 乘加。
+    # 缓存布局 (num_blocks, block_size, num_kv_heads, head_dim)
+    # 这个布局的 trade-off：(block_size, head, dim) 排列让同一 token 的整条 head 向量连续，store 是完美合并写；
+    # 但 decode 时同一 head 跨 token 读取的 stride 是 num_kv_heads * head_dim，非连续。
+    # 这也是为什么 decode kernel 退化成逐 token 标量内积。
     cache_offset = (
         block_idx * block_size * num_kv_heads * head_dim  # skip previous blocks
         + block_offset * num_kv_heads * head_dim  # skip previous positions in block
@@ -131,14 +135,17 @@ def flash_attention_varlen_kernel(
     BLOCK_N: tl.constexpr,
 ):
     """
-    Flash Attention kernel for variable-length sequences.
-    Each program processes one block of queries for one head in one sequence.
+    用于变长序列的 Flash Attention 内核。
+    每个程序处理一个序列中一个注意力头的一个查询块。
     """
     # Program IDs
     start_m: int = tl.program_id(0)  # block index
     off_h: int = tl.program_id(1)  # head index
     seq_idx: int = tl.program_id(2)  # sequence index
 
+    # prefill 时本步的 K/V 就在寄存器里，没必要从缓存再读一遍，
+    # 所以走独立的 varlen flash attention，
+    # cu_seqlens 划段、online softmax、GQA 用 off_h // (num_heads // num_kv_heads) 映射 KV head：
     # Determine which KV head to use (for GQA)
     kv_head_idx = off_h // (num_heads // num_kv_heads)
 
@@ -357,6 +364,8 @@ def paged_attention_decode_kernel(
     max_chunks = tl.cdiv(max_num_blocks * block_size, BLOCK_N)
 
     # Process all tokens in chunks
+    # decode 走 paged_attention_decode_kernel，两层循环：
+    # 外层按 BLOCK_N 分块遍历 context，内层逐 token 用 block_table 解引用物理块号：
     for chunk_idx in range(max_chunks):
         # Global token index for this chunk
         token_start = chunk_idx * BLOCK_N
@@ -543,6 +552,7 @@ class Attention(nn.Module):
         k_cache, v_cache = self.k_cache, self.v_cache
 
         # Store current k, v into cache if cache is allocated
+        # 先无条件把当前 step 的 K/V 落盘（slot_mapping 为 -1 的会被 kernel 跳过），再做 attention
         if (
             k_cache.numel() > 0
             and v_cache.numel() > 0

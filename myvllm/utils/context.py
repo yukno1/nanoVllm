@@ -1,7 +1,9 @@
 from dataclasses import dataclass
+
 import torch
 
 
+# 全局单例
 @dataclass
 class Context:
     is_prefill: bool = False

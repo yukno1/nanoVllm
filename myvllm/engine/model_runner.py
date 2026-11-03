@@ -1,15 +1,16 @@
 import math
-import torch
 import pickle
-import torch.distributed as dist
-from pathlib import Path
-from multiprocessing.synchronize import Event
 from multiprocessing.shared_memory import SharedMemory
+from multiprocessing.synchronize import Event
+from pathlib import Path
 
-from ..models.qwen3 import Qwen3ForCausalLM
-from ..models.llama3 import LlamaForCausalLM
-from ..layers.sampler import SamplerLayer
+import torch
+import torch.distributed as dist
+
 from ..engine.sequence import Sequence
+from ..layers.sampler import SamplerLayer
+from ..models.llama3 import LlamaForCausalLM
+from ..models.qwen3 import Qwen3ForCausalLM
 from ..utils import *
 
 
@@ -232,7 +233,9 @@ class ModelRunner:
 
         # find parameters to compute kv cache size
         num_layers = self.config["num_layers"]
-        num_kv_heads = self.config["num_kv_heads"] // self.world_size
+        num_kv_heads = (
+            self.config["num_kv_heads"] // self.world_size
+        )  # TP 时每个 rank 只存自己那几颗 KV head
         head_dim = (
             self.config["head_dim"]
             if "head_dim" in self.config
@@ -243,7 +246,7 @@ class ModelRunner:
         # compute the actual byte required of each block
         block_bytes = (
             self.block_size
-            * 2
+            * 2  # K 和 V 共用计数
             * num_layers
             * num_kv_heads
             * head_dim
@@ -283,9 +286,10 @@ class ModelRunner:
                 f"[Rank 0] Global max_cached_blocks (min): {self.config['max_cached_blocks']}"
             )
 
-        # allocate max possible kv cache for the model, instead for each sequence
-        # this is the key for paged attention: one giant KV cache pool, divided into blocks
-        # IMPORTANT: Use zeros() instead of empty() to avoid garbage values
+        # 为模型分配尽可能大的 KV 缓存，而不是为每个序列单独分配。
+        # 这是 Paged Attention（分页注意力）的关键：一个巨大的 KV 缓存池，被划分为多个块。
+        # IMPORTANT: zeros() 来避免 NaN 垃圾值被 attention 读到（prefix cache 未命中的尾部位置仍会被 mask，但脏数据在某些 kernel 路径上会出问题）
+        # 分配一整块连续显存
         allocated_kv_cache = torch.zeros(
             2,
             self.config["num_layers"],
@@ -295,6 +299,7 @@ class ModelRunner:
             head_dim,
             device=f"cuda:{self.rank}",
         )
+        # 按 layer 切成视图挂到每个 Attention 模块上——不复制数据，只是同一块内存的不同偏移
         layer_id = 0
         for module in self.model.modules():
             if hasattr(module, "k_cache") and hasattr(module, "v_cache"):
@@ -336,6 +341,8 @@ class ModelRunner:
             cu_seqlens_q.append(cu_seqlens_q[-1] + seqlens_q[-1])
             cu_seqlens_k.append(cu_seqlens_k[-1] + seqlens_k[-1])
             if seq.block_table:
+                # 只给 num_cached_blocks 之后的块生成 slot，且最后一块按 last_block_num_tokens 截断（不满块不写满）；
+                # 如果存在前缀复用（cu_seqlens_q[-1] < cu_seqlens_k[-1]）才需要 pad 并下发 block_tables
                 for i, block_id in enumerate(seq.block_table[seq.num_cached_blocks :]):
                     if seq.num_cached_blocks + i != seq.num_blocks - 1:
                         slot_mappings.extend(
@@ -395,9 +402,11 @@ class ModelRunner:
     # prepare input data for decoding
     def prepare_decode(self, seqs: list[Sequence]) -> torch.Tensor:
         input_ids = []
-        context_lens = []
-        slot_mappings = []
-        block_tables = []
+        context_lens = []  # 读的时候的序列长度边界。
+        slot_mappings = []  # 写用。全局逻辑 slot 编号 = block_id * block_size + 块内偏移，把新算出的 K/V 写到哪。
+        block_tables = []  # 读用。(batch, max_num_blocks) 的二维表，第 i 行的第 j 项是该序列第 j 个逻辑块对应的物理块号，解引用后加上块内偏移即可定位。
+
+        # 一条序列只处理一个新 token，所以 slot 就是最后一块的最后一个位置
         for seq in seqs:
             input_ids.append(seq.last_token)
             context_lens.append(len(seq))
@@ -455,8 +464,10 @@ class ModelRunner:
             bs = input_ids.size(0)
             context = get_context()
 
-            # finds smallest captured graph that fits the batch size
-            graph = self.graphs[next(bs_ for bs_ in self.graphs.keys() if bs_ >= bs)]
+            # 运行时选最小的够用 graph，用 copy_ 灌数据再 replay()；
+            # slot_mapping 先 fill_(-1) 是为了让 padding 的 batch 位置不写缓存
+            # （配合 kernel 里的 if slot_idx == -1: return）：
+            graph = self.graphs[next(bs_ for bs_ in self.graphs if bs_ >= bs)]
             vars = self.graph_vars
             # copy input data into graph variables
             vars["input_ids"][:bs].copy_(input_ids)
@@ -504,6 +515,10 @@ class ModelRunner:
         max_num_blocks = math.ceil(max_len / self.block_size)
         # for decoding, input is always of shape (batch_size, 1)
         input_ids = torch.zeros(max_bs, dtype=torch.long, device=f"cuda:{self.rank}")
+
+        # decode 时 KV 相关的三个输入张量必须在 capture 前预分配好固定地址，否则 graph 无法复用。
+        # 所以 capture_cudagraph 按 max_bs × max_num_blocks 预分配 slot_mapping / context_lens / block_tables，
+        # 然后对 [1,2,4,8] + range(16, max_bs+1, 16) 每个 batch size 各捕获一份：
         # for paged attention
         # where to write new KV values in the cache
         slot_mapping = torch.zeros(max_bs, dtype=torch.long, device=f"cuda:{self.rank}")

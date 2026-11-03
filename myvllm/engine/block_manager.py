@@ -1,11 +1,14 @@
-import xxhash
-import numpy as np
 from collections import deque
+
+import numpy as np
+import xxhash
 
 from myvllm.engine.sequence import Sequence
 
 
 class Block:
+    __slots__ = ("block_id", "hash", "ref_count", "token_ids")
+
     def __init__(self, block_id):
         self.block_id = block_id
         self.hash = -1
@@ -23,6 +26,15 @@ class Block:
 
 
 class BlockManager:
+    __slots__ = (
+        "block_size",
+        "blocks",
+        # 三类队列
+        "free_block_ids",  # deque
+        "hash_to_block_id",  # 前缀缓存哈希表
+        "used_block_ids",  # set
+    )
+
     def __init__(self, num_blocks: int, block_size: int):
         # block_size: number of tokens per block
         self.block_size: int = block_size
@@ -37,6 +49,7 @@ class BlockManager:
 
     # given token_ids, compute the hash value
     # use prefix_hash_value to compute the hash in a context-sensitive way
+    # 前缀缓存哈希是链式的：块 hash = xxhash(前一块 hash || 本块 token_ids)，只有满块才计算，不满的块 hash 固定为 -1（不参与复用）
     def compute_hash(self, token_ids: list[int], prefix_hash_value: int) -> int:
         h = xxhash.xxh64()
         if prefix_hash_value != -1:
@@ -44,28 +57,13 @@ class BlockManager:
         h.update(np.array(token_ids, dtype=np.int32).tobytes())
         return h.intdigest()
 
-    # move this block to used list
-    def _allocate_block(self, block_id: int) -> Block:
-        block = self.blocks[block_id]
-        assert block.ref_count == 0, "Block is already allocated"
-        block.reset()
-        self.free_block_ids.remove(block_id)
-        self.used_block_ids.add(block_id)
-        return block
-
-    def _deallocate_block(self, block_id: int) -> None:
-        assert self.blocks[block_id].ref_count == 0, "Block is still in use"
-        block = self.blocks[block_id]
-        block.token_ids = []
-        self.used_block_ids.remove(block_id)
-        self.free_block_ids.append(block_id)
-
     # whether we can allocate a block for this sequence
     def can_allocate(self, seq: Sequence) -> bool:
         return len(self.free_block_ids) >= seq.num_blocks
 
     def allocate(self, seq: Sequence) -> None:
         h = -1
+        # 逐块查表
         for i in range(seq.num_blocks):
             no_cache_found = False
 
@@ -78,11 +76,12 @@ class BlockManager:
             )
             block_id = self.hash_to_block_id.get(h, -1)
 
-            # if cache miss or hash collision
+            # 如果缓存未命中或哈希碰撞
             if block_id == -1 or self.blocks[block_id].token_ids != token_ids:
                 no_cache_found = True
 
             if not no_cache_found:
+                # 命中就 ref_count += 1 共享物理块并累加 seq.num_cached_tokens，未命中就从 free 队列取新块。
                 # update sequence information
                 seq.num_cached_tokens += self.block_size  # which == len(token_ids)
                 # update block information, considering the edge case that the block is not allocated yet but with hash code
@@ -101,6 +100,11 @@ class BlockManager:
             seq.block_table.append(block.block_id)
 
     def deallocate(self, seq: Sequence) -> None:
+        """
+        走引用计数，归零才真正回收到 free 队列，所以多个请求共享的相同 prompt 前缀不会被提前释放。\n
+        NOTE 块被回收时不清 hash 表，这就是前缀缓存（跨请求命中）能生效的原因；_deallocate_block 只清 token_ids 用于下次碰撞校验。
+        """
+
         # update block information
         for block_id in seq.block_table:
             block = self.blocks[block_id]
@@ -118,10 +122,12 @@ class BlockManager:
             return len(self.free_block_ids) > 0
         return True
 
-    # this is the actual work to append tokens to this sequence
-    # this is called when the new token has been added to the seq information
-    # but no block in gpu has yet allocate for it
     def append(self, seq: Sequence) -> None:
+        """
+        处理解码增长：块刚好写满时固化 hash；下一 token 需要新块时（num_tokens % block_size == 1）才真正分配。\n
+        这是将 token 追加到该序列的实际操作。
+        当新 token 被添加到序列信息后，会调用此函数，但此时 GPU 中尚未为其分配任何显存块。
+        """
         block_tables = seq.block_table
         last_block_for_seq_id = block_tables[-1]
 
@@ -150,3 +156,19 @@ class BlockManager:
             assert self.blocks[last_block_for_seq_id].hash == -1, (
                 "Last block should be partial block with hash -1"
             )
+
+    # move this block to used list
+    def _allocate_block(self, block_id: int) -> Block:
+        block = self.blocks[block_id]
+        assert block.ref_count == 0, "Block is already allocated"
+        block.reset()
+        self.free_block_ids.remove(block_id)
+        self.used_block_ids.add(block_id)
+        return block
+
+    def _deallocate_block(self, block_id: int) -> None:
+        assert self.blocks[block_id].ref_count == 0, "Block is still in use"
+        block = self.blocks[block_id]
+        block.token_ids = []
+        self.used_block_ids.remove(block_id)
+        self.free_block_ids.append(block_id)

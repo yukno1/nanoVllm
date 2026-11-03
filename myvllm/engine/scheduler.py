@@ -78,6 +78,11 @@ class Scheduler:
         return scheduled_sequences, False
 
     def preempt(self, seq: Sequence) -> None:
+        """
+        显存不足时 Scheduler.preempt 直接 deallocate 整个序列并丢回 waiting 队列，
+        因为 deallocate 把 num_cached_tokens 归零，
+        该请求下次会按 recompute 方式整体重算（没有 swap 到 CPU 的实现）
+        """
         self.block_manager.deallocate(seq)
         seq.status = SequenceStatus.WAITING
         self.waiting.appendleft(seq)

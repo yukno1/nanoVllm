@@ -11,17 +11,17 @@ class LayerNorm(nn.Module):
         self.weight = nn.Parameter(gamma.detach().clone())
 
     @property
-    def gamma(self):
+    def gamma(self) -> nn.Parameter:
         """Backward compatibility: gamma alias for weight"""
         return self.weight
 
     @torch.compile
     def rms_forward(self, x: torch.Tensor) -> torch.Tensor:
-        # RMSNorm(x) = (x / sqrt(mean(x²) + ε)) ⊙ γ
+        """RMSNorm(x) = (x / sqrt(mean(x²) + ε)) ⊙ γ"""
 
         variance = x.pow(2).mean(dim=-1, keepdim=True) + self.eps
         sqrt_variance = variance.sqrt()
-        x_norm = x / sqrt_variance * self.weight
+        x_norm = x / sqrt_variance * self.gemma
 
         return x_norm
 
