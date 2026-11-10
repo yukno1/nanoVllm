@@ -1,7 +1,8 @@
+from collections.abc import Callable
+
 import torch
-from torch import nn
 import torch.nn.functional as F
-from typing import Callable
+from torch import nn
 
 
 # 模拟分布式环境
@@ -72,9 +73,9 @@ class ColumnParallelLinear(LinearBase):
         bias: bool = False,
     ) -> None:
         tp_size = dist.get_world_size()
-        assert (
-            output_size % tp_size == 0
-        ), "Output size must be divisible by tensor parallel size."
+        assert output_size % tp_size == 0, (
+            "Output size must be divisible by tensor parallel size."
+        )
         super().__init__(
             input_size, output_size // tp_size, bias, tp_dim=0
         )  # tp_dim=0 -> column parallel
@@ -94,9 +95,9 @@ class ColumnParallelLinear(LinearBase):
         shard_size = (
             full_data_output_size // self.tp_size
         )  # param.data.size(self.tp_dim)
-        assert shard_size == param.data.size(
-            0
-        ), "Shard size dows not match the parameter size."
+        assert shard_size == param.data.size(0), (
+            "Shard size dows not match the parameter size."
+        )
         start_idx = self.tp_rank * shard_size  # offset
         loaded_weight = loaded_weight.narrow(self.tp_dim, start_idx, shard_size)
         param_data.copy_(loaded_weight)
@@ -123,7 +124,7 @@ if __name__ == "__main__":
 
     # print weight
     def print_weight(layer):
-        print(f"Before loading weight:")
+        print("Before loading weight:")
         print(layer.weight)
         layer.weight_loader(layer.weight, full_weight)
         print("After loading weight:")

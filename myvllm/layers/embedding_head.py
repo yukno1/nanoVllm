@@ -1,8 +1,9 @@
+from collections.abc import Callable
+
 import torch
-from torch import nn
-import torch.nn.functional as F
 import torch.distributed as dist
-from typing import Callable
+import torch.nn.functional as F
+from torch import nn
 
 from ..utils import get_context
 

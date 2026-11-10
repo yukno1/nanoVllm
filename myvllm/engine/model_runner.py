@@ -567,10 +567,10 @@ class ModelRunner:
             torch.cuda.synchronize()
             reset_context()
 
-        self.graph_vars = dict(
-            input_ids=input_ids,
-            slot_mapping=slot_mapping,
-            context_lens=context_lens,
-            block_tables=block_tables,
-            outputs=outputs,
-        )
+        self.graph_vars = {
+            "input_ids": input_ids,
+            "slot_mapping": slot_mapping,
+            "context_lens": context_lens,
+            "block_tables": block_tables,
+            "outputs": outputs,
+        }

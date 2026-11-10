@@ -1,7 +1,8 @@
-import torch
-from torch import nn
-import torch.nn.functional as F
 import time
+
+import torch
+import torch.nn.functional as F
+from torch import nn
 
 
 class SiluAndMul(nn.Module):
