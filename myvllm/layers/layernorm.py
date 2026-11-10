@@ -1,6 +1,7 @@
+from typing import overload
+
 import torch
 from torch import nn
-from typing import overload
 
 
 class LayerNorm(nn.Module):
@@ -21,7 +22,7 @@ class LayerNorm(nn.Module):
 
         variance = x.pow(2).mean(dim=-1, keepdim=True) + self.eps
         sqrt_variance = variance.sqrt()
-        x_norm = x / sqrt_variance * self.gemma
+        x_norm = x / sqrt_variance * self.gamma
 
         return x_norm
 

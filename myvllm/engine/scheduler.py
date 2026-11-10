@@ -1,6 +1,7 @@
 from collections import deque
-from myvllm.engine.sequence import Sequence, SequenceStatus
+
 from myvllm.engine.block_manager import BlockManager
+from myvllm.engine.sequence import Sequence, SequenceStatus
 
 
 class Scheduler:

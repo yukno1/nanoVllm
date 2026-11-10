@@ -1,10 +1,10 @@
-import time
 import os
-import torch
-import numpy as np
-import matplotlib.pyplot as plt
+import time
 
-from transformers import AutoTokenizer, AutoModelForCausalLM
+import matplotlib.pyplot as plt
+import numpy as np
+import torch
+from transformers import AutoModelForCausalLM, AutoTokenizer
 
 # ===== minivllm =====
 from myvllm.engine.llm_engine import LLMEngine as MiniLLM
@@ -22,7 +22,7 @@ config = {
     "block_size": 256,
     "world_size": 1,
     "model_name_or_path": "Qwen/Qwen3-0.6B",
-    "enforce_eager": True,
+    "enforce_eager": False,
     "vocab_size": 151936,  # Fixed: was 151643, HF model uses 151936
     "hidden_size": 1024,
     "num_heads": 16,
@@ -143,6 +143,11 @@ def run_minivllm(tokenizer):
 
 
 def run_transformers_test(tokenizer):
+    # MiniLLM 在 ModelRunner 中调用了 torch.set_default_device("cuda:0")，
+    # 这会残留为全局状态，导致 transformers 认为需要 device_map（进而要求 accelerate）。
+    # 这里先恢复默认设备为 cpu，再显式把模型移动到目标设备。
+    torch.set_default_device("cpu")
+
     # transformers
     inputs = tokenizer(PROMPTS, return_tensors="pt", padding=True, truncation=True).to(
         device

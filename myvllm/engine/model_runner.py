@@ -19,12 +19,12 @@ class ModelRunner:
         self.config = config
         # self.event = event
         # Split event storage by rank to avoid Union type issues
-        if event is Event:
+        if isinstance(event, list):
             self.events: list[Event] = (
                 event  # rank 0 gets the list of all worker events
             )
             self.event: Event | None = None  # rank 0 never uses a single event
-        elif event is list[Event]:
+        else:
             self.event: Event = event  # worker ranks get their own event
             self.events: list[Event] | None = None  # workers never use the events list
 
@@ -510,7 +510,7 @@ class ModelRunner:
     # (later use graph.replay() to run the captured graph)
     @torch.inference_mode()
     def capture_cudagraph(self) -> None:
-        max_bs = self.config["max_num_seqs"]
+        max_bs = self.config["max_num_sequences"]
         max_len = self.config["max_model_length"]
         max_num_blocks = math.ceil(max_len / self.block_size)
         # for decoding, input is always of shape (batch_size, 1)
@@ -528,9 +528,12 @@ class ModelRunner:
         block_tables = torch.zeros(
             max_bs, max_num_blocks, dtype=torch.int32, device=f"cuda:{self.rank}"
         )
-        # output logits
+        # output hidden states（logits 由 compute_logits 在 graph 外计算，故这里是 hidden_size 而非 vocab_size）
         outputs = torch.zeros(
-            max_bs, self.config["vocab_size"], device=f"cuda:{self.rank}"
+            max_bs,
+            self.config["hidden_size"],
+            dtype=next(self.model.parameters()).dtype,
+            device=f"cuda:{self.rank}",
         )
 
         # graphs to be captured for different batch sizes
@@ -554,8 +557,9 @@ class ModelRunner:
 
             with torch.cuda.graph(graph, graph_pool):
                 outputs[:batch_size] = self.model(input_ids[:batch_size])
-                if graph_pool is None:
-                    graph_pool = graph.pool()
+            # pool() 必须在 capture 成功结束后才能调用，故放在 with 之外
+            if graph_pool is None:
+                graph_pool = graph.pool()
             # store the captured graph
             self.graphs[batch_size] = graph
 

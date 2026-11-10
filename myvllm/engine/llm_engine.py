@@ -1,20 +1,21 @@
 import atexit
-import torch.distributed as dist
 import time
-import torch.multiprocessing as mp
 
-from ..engine.sequence import Sequence
-from ..engine.scheduler import Scheduler
-from ..engine.model_runner import ModelRunner
-from ..sampling_params import SamplingParams
+import torch.distributed as dist
+import torch.multiprocessing as mp
 from transformers import AutoTokenizer
+
+from ..engine.model_runner import ModelRunner
+from ..engine.scheduler import Scheduler
+from ..engine.sequence import Sequence
+from ..sampling_params import SamplingParams
 
 
 def worker_process(config, rank, event):
     """Worker process function that initializes ModelRunner and enters loop."""
     # FIRST print before any other code
-    import sys
     import os
+    import sys
 
     sys.stdout = os.fdopen(sys.stdout.fileno(), "w", buffering=1)  # Line buffering
     sys.stderr = os.fdopen(sys.stderr.fileno(), "w", buffering=1)

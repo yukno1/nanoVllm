@@ -1,8 +1,10 @@
+from collections.abc import Callable
+from typing import Literal
+
 import torch
-from torch import nn
-import torch.nn.functional as F
 import torch.distributed as dist
-from typing import Callable, Literal
+import torch.nn.functional as F
+from torch import nn
 
 
 class Parameter(nn.Parameter):
@@ -19,7 +21,7 @@ class LinearBase(nn.Module):
         input_size: int,
         output_size: int,
         bias: bool = False,
-        tp_dim: Literal[0, 1, None] = None,
+        tp_dim: Literal[0, 1] | None = None,
     ) -> None:
         super().__init__()
         # set tp_dim, tp_rank, tp_world_size for tensor parallelism

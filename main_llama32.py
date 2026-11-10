@@ -1,9 +1,10 @@
-import sys, os
+import os
+import sys
 from pathlib import Path
-import torch.distributed as dist
 
-from transformers import AutoTokenizer, AutoModelForCausalLM
 import torch
+import torch.distributed as dist
+from transformers import AutoModelForCausalLM, AutoTokenizer
 
 # Add src to Python path
 sys.path.insert(0, str(Path(__file__).parent / "src"))
